@@ -6,13 +6,14 @@ Uses the Coinbase Developer Platform (CDP) API with JWT authentication.
 
 Usage:
     pip install PyJWT cryptography
-    python export_coinbase_addresses.py
+    python export_coinbase_addresses.py --key-file coinbase_key.pem.txt
 
-Environment variables (required):
+Environment variables (required unless using --key-file):
     COINBASE_API_KEY    - Your CDP API key name (starts with "organizations/...")
-    COINBASE_API_SECRET - Your CDP API private key (PEM format, starts with "-----BEGIN EC PRIVATE KEY-----")
+    COINBASE_API_SECRET - Your CDP API private key (PEM format)
 
 Optional flags:
+    --key-file FILE     - Path to the PEM private key file (recommended over env var)
     --currency CURRENCY - Filter by currency (e.g. BTC, ETH)
     --output FILE       - Output CSV file path (default: coinbase_addresses.csv)
     --json              - Output as JSON instead of CSV
@@ -51,7 +52,9 @@ def build_jwt(method: str, path: str, api_key: str, api_secret: str) -> str:
     """Build a signed JWT for Coinbase CDP API authentication."""
     import jwt
 
-    uri = f"{method.upper()} {API_URL}{path}"
+    # URI format: "METHOD host/path" (no scheme)
+    host = API_URL.replace("https://", "").replace("http://", "")
+    uri = f"{method.upper()} {host}{path}"
     now = int(time.time())
 
     payload = {
@@ -170,6 +173,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Export Coinbase addresses to CSV/JSON for tax purposes."
     )
+    parser.add_argument(
+        "--key-file",
+        help="Path to the PEM private key file (recommended over env var)",
+    )
     parser.add_argument("--currency", help="Filter by currency (e.g. BTC, ETH)")
     parser.add_argument(
         "--output",
@@ -182,15 +189,33 @@ def main():
     args = parser.parse_args()
 
     api_key = os.environ.get("COINBASE_API_KEY")
-    api_secret = os.environ.get("COINBASE_API_SECRET")
+    api_secret = None
 
-    if not api_key or not api_secret:
+    # Load private key from file if --key-file is provided
+    if args.key_file:
+        try:
+            with open(args.key_file, "r") as f:
+                api_secret = f.read().strip()
+        except FileNotFoundError:
+            print(f"Error: Key file not found: {args.key_file}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        api_secret = os.environ.get("COINBASE_API_SECRET")
+
+    if not api_key:
         print(
-            "Error: COINBASE_API_KEY and COINBASE_API_SECRET environment variables are required.\n"
-            "Generate a CDP API key at https://www.coinbase.com/settings/api\n"
-            "  - COINBASE_API_KEY: the key name (starts with organizations/...)\n"
-            "  - COINBASE_API_SECRET: the full PEM private key\n"
-            "Required permission: View (read-only)",
+            "Error: COINBASE_API_KEY environment variable is required.\n"
+            "This is the API key name that starts with organizations/...\n"
+            "Generate a CDP API key at https://www.coinbase.com/settings/api",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not api_secret:
+        print(
+            "Error: Private key is required. Either:\n"
+            "  --key-file coinbase_key.pem.txt   (recommended)\n"
+            "  or set COINBASE_API_SECRET env var",
             file=sys.stderr,
         )
         sys.exit(1)
