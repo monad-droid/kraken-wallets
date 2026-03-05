@@ -1,0 +1,11 @@
+# Output files
+withdrawal_addresses.csv
+withdrawal_addresses.json
+
+# Environment / secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
