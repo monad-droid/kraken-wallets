@@ -2,12 +2,15 @@
 """
 Export Coinbase withdrawal addresses to CSV for tax/record-keeping purposes.
 
+Uses the Coinbase Developer Platform (CDP) API with JWT authentication.
+
 Usage:
+    pip install PyJWT cryptography
     python export_coinbase_addresses.py
 
 Environment variables (required):
-    COINBASE_API_KEY    - Your Coinbase API key
-    COINBASE_API_SECRET - Your Coinbase API secret
+    COINBASE_API_KEY    - Your CDP API key name (starts with "organizations/...")
+    COINBASE_API_SECRET - Your CDP API private key (PEM format, starts with "-----BEGIN EC PRIVATE KEY-----")
 
 Optional flags:
     --currency CURRENCY - Filter by currency (e.g. BTC, ETH)
@@ -17,10 +20,9 @@ Optional flags:
 
 import argparse
 import csv
-import hashlib
-import hmac
 import json
 import os
+import secrets
 import sys
 import time
 import urllib.error
@@ -30,28 +32,56 @@ API_URL = "https://api.coinbase.com"
 API_VERSION = "2023-01-01"
 
 
-def coinbase_auth_headers(method: str, path: str, body: str, api_key: str, api_secret: str) -> dict:
-    """Generate authentication headers for the Coinbase API (API Key auth)."""
-    timestamp = str(int(time.time()))
-    message = timestamp + method.upper() + path + body
-    signature = hmac.new(
-        api_secret.encode("utf-8"),
-        message.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+def _check_jwt_deps():
+    """Check that PyJWT and cryptography are installed."""
+    try:
+        import jwt  # noqa: F401
+        return True
+    except ImportError:
+        print(
+            "Error: PyJWT and cryptography packages are required for CDP API keys.\n"
+            "Install them with:\n\n"
+            "    pip install PyJWT cryptography\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    return {
-        "CB-ACCESS-KEY": api_key,
-        "CB-ACCESS-SIGN": signature,
-        "CB-ACCESS-TIMESTAMP": timestamp,
-        "CB-VERSION": API_VERSION,
-        "Content-Type": "application/json",
+
+def build_jwt(method: str, path: str, api_key: str, api_secret: str) -> str:
+    """Build a signed JWT for Coinbase CDP API authentication."""
+    import jwt
+
+    uri = f"{method.upper()} {API_URL}{path}"
+    now = int(time.time())
+
+    payload = {
+        "sub": api_key,
+        "iss": "coinbase-cloud",
+        "aud": ["cdp_service"],
+        "nbf": now,
+        "exp": now + 120,
+        "uris": [uri],
     }
+
+    headers = {
+        "kid": api_key,
+        "nonce": secrets.token_hex(16),
+        "typ": "JWT",
+    }
+
+    return jwt.encode(payload, api_secret, algorithm="ES256", headers=headers)
 
 
 def coinbase_get(path: str, api_key: str, api_secret: str) -> dict:
     """Make an authenticated GET request to the Coinbase API."""
-    headers = coinbase_auth_headers("GET", path, "", api_key, api_secret)
+    token = build_jwt("GET", path, api_key, api_secret)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "CB-VERSION": API_VERSION,
+        "Content-Type": "application/json",
+    }
+
     req = urllib.request.Request(API_URL + path, headers=headers, method="GET")
     with urllib.request.urlopen(req, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -157,11 +187,19 @@ def main():
     if not api_key or not api_secret:
         print(
             "Error: COINBASE_API_KEY and COINBASE_API_SECRET environment variables are required.\n"
-            "Generate an API key at https://www.coinbase.com/settings/api\n"
-            "Required permissions: wallet:accounts:read, wallet:addresses:read",
+            "Generate a CDP API key at https://www.coinbase.com/settings/api\n"
+            "  - COINBASE_API_KEY: the key name (starts with organizations/...)\n"
+            "  - COINBASE_API_SECRET: the full PEM private key\n"
+            "Required permission: View (read-only)",
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # The private key may have literal \n — convert to real newlines
+    if "\\n" in api_secret and "-----BEGIN" in api_secret:
+        api_secret = api_secret.replace("\\n", "\n")
+
+    _check_jwt_deps()
 
     ext = ".json" if args.use_json else ".csv"
     output_path = args.output or f"coinbase_addresses{ext}"
