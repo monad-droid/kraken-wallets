@@ -59,7 +59,7 @@ def build_jwt(method: str, path: str, api_key: str, api_secret: str) -> str:
 
     payload = {
         "sub": api_key,
-        "iss": "coinbase-cloud",
+        "iss": "cdp",
         "aud": ["cdp_service"],
         "nbf": now,
         "exp": now + 120,
