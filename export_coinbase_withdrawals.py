@@ -115,6 +115,24 @@ def fetch_withdrawals(api_key: str, api_secret: str, currency: str = None) -> li
             next_uri = pagination.get("next_uri")
         return items
 
+    # First try v3 Advanced Trade API to verify auth works
+    try:
+        v3_result = authed_get("/api/v3/brokerage/accounts?limit=250")
+        v3_accounts = v3_result.get("accounts", [])
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise RuntimeError(
+                "401 Unauthorized on v3 endpoint — your API key or private key may be invalid.\n"
+                "Try creating a fresh key at https://portal.cdp.coinbase.com/access/api"
+            )
+        raise
+
+    # Build a map of account UUID -> currency from v3
+    acct_map = {}
+    for acct in v3_accounts:
+        acct_map[acct.get("uuid", "")] = acct.get("currency", "")
+
+    # Now use v2 endpoints for transaction history
     accounts = fetch_all_pages("/v2/accounts?limit=100")
 
     withdrawals = []
