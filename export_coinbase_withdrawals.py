@@ -31,7 +31,7 @@ import sys
 def _check_deps():
     """Check that the Coinbase SDK is installed."""
     try:
-        from coinbase.rest import RESTClient  # noqa: F401
+        from coinbase import jwt_generator  # noqa: F401
     except ImportError:
         print(
             "Error: coinbase-advanced-py package is required.\n"
@@ -42,23 +42,13 @@ def _check_deps():
         sys.exit(1)
 
 
-def make_client(api_key: str, api_secret: str):
-    """Create a Coinbase REST client."""
-    from coinbase.rest import RESTClient
-    return RESTClient(api_key=api_key, api_secret=api_secret)
-
-
-def fetch_withdrawals(client, currency: str = None) -> list:
+def fetch_withdrawals(api_key: str, api_secret: str, currency: str = None) -> list:
     """Fetch all withdrawal (send) transactions across all Coinbase accounts."""
     import urllib.request
     import urllib.error
 
-    # The SDK is mainly for Advanced Trade, but we can use its JWT generator
-    # to auth against the v2 endpoints
     from coinbase import jwt_generator
 
-    api_key = client.API_KEY
-    api_secret = client.API_SECRET
     base_url = "https://api.coinbase.com"
 
     def authed_get(path):
@@ -210,13 +200,11 @@ def main():
 
     _check_deps()
 
-    client = make_client(api_key, api_secret)
-
     ext = ".json" if args.use_json else ".csv"
     output_path = args.output or f"coinbase_withdrawals{ext}"
 
     try:
-        withdrawals = fetch_withdrawals(client, currency=args.currency)
+        withdrawals = fetch_withdrawals(api_key, api_secret, currency=args.currency)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

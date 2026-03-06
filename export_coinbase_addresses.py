@@ -28,7 +28,7 @@ import sys
 def _check_deps():
     """Check that the Coinbase SDK is installed."""
     try:
-        from coinbase.rest import RESTClient  # noqa: F401
+        from coinbase import jwt_generator  # noqa: F401
     except ImportError:
         print(
             "Error: coinbase-advanced-py package is required.\n"
@@ -39,20 +39,12 @@ def _check_deps():
         sys.exit(1)
 
 
-def make_client(api_key: str, api_secret: str):
-    """Create a Coinbase REST client."""
-    from coinbase.rest import RESTClient
-    return RESTClient(api_key=api_key, api_secret=api_secret)
-
-
-def fetch_coinbase_addresses(client, currency: str = None) -> list:
+def fetch_coinbase_addresses(api_key: str, api_secret: str, currency: str = None) -> list:
     """Fetch all addresses across all Coinbase accounts."""
     import urllib.request
 
     from coinbase import jwt_generator
 
-    api_key = client.API_KEY
-    api_secret = client.API_SECRET
     base_url = "https://api.coinbase.com"
 
     def authed_get(path):
@@ -190,13 +182,11 @@ def main():
 
     _check_deps()
 
-    client = make_client(api_key, api_secret)
-
     ext = ".json" if args.use_json else ".csv"
     output_path = args.output or f"coinbase_addresses{ext}"
 
     try:
-        addresses = fetch_coinbase_addresses(client, currency=args.currency)
+        addresses = fetch_coinbase_addresses(api_key, api_secret, currency=args.currency)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
