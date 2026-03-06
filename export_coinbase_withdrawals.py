@@ -5,15 +5,22 @@ Export Coinbase withdrawal transactions to CSV for tax/record-keeping purposes.
 Shows every crypto send/withdrawal from your Coinbase account, including
 the destination address, amount, date, and fees.
 
-Uses the official Coinbase Advanced API Python SDK for authentication.
+Supports two authentication methods:
+  1. Legacy API key (from coinbase.com/settings/api) — HMAC auth, no extra deps
+  2. CDP API key (from portal.cdp.coinbase.com) — JWT/ES256 auth, needs PyJWT
 
-Usage:
+Usage (legacy key — recommended for personal accounts):
+    export COINBASE_API_KEY="your-api-key"
+    export COINBASE_API_SECRET="your-api-secret"
+    python3 export_coinbase_withdrawals.py
+
+Usage (CDP key):
     pip install PyJWT cryptography
-    python export_coinbase_withdrawals.py --key-json cdp_api_key.json
+    python3 export_coinbase_withdrawals.py --key-json cdp_api_key.json
 
 Options:
-    --key-json FILE     - Path to the CDP JSON key file (recommended, contains both key name and private key)
-    --key-file FILE     - Path to a PEM private key file (requires COINBASE_API_KEY env var)
+    --key-json FILE     - Path to a CDP JSON key file (JWT auth)
+    --key-file FILE     - Path to a PEM private key file (JWT auth, requires COINBASE_API_KEY env var)
     --currency CURRENCY - Filter by currency (e.g. BTC, ETH)
     --output FILE       - Output file path (default: coinbase_withdrawals.csv)
     --json              - Output as JSON instead of CSV
@@ -26,19 +33,42 @@ import os
 import sys
 
 
-def _check_deps():
-    """Check that PyJWT and cryptography are installed."""
+def _check_jwt_deps():
+    """Check that PyJWT and cryptography are installed (only needed for CDP keys)."""
     try:
         import jwt  # noqa: F401
         from cryptography.hazmat.primitives.serialization import load_pem_private_key  # noqa: F401
     except ImportError:
         print(
-            "Error: PyJWT and cryptography packages are required.\n"
+            "Error: PyJWT and cryptography packages are required for CDP key auth.\n"
             "Install them with:\n\n"
             "    pip install PyJWT cryptography\n",
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+def build_hmac_headers(method: str, path: str, api_key: str, api_secret: str) -> dict:
+    """Build HMAC-SHA256 auth headers for Coinbase legacy API keys."""
+    import hashlib
+    import hmac
+    import time
+
+    timestamp = str(int(time.time()))
+    message = timestamp + method.upper() + path
+    signature = hmac.new(
+        api_secret.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return {
+        "CB-ACCESS-KEY": api_key,
+        "CB-ACCESS-SIGN": signature,
+        "CB-ACCESS-TIMESTAMP": timestamp,
+        "CB-VERSION": "2023-01-01",
+        "Content-Type": "application/json",
+    }
 
 
 def build_coinbase_jwt(method: str, path: str, api_key: str, api_secret: str) -> str:
@@ -85,7 +115,7 @@ def build_coinbase_jwt(method: str, path: str, api_key: str, api_secret: str) ->
     return token
 
 
-def fetch_withdrawals(api_key: str, api_secret: str, currency: str = None) -> list:
+def fetch_withdrawals(api_key: str, api_secret: str, currency: str = None, auth_mode: str = "hmac") -> list:
     """Fetch all withdrawal (send) transactions across all Coinbase accounts."""
     import urllib.request
     import urllib.error
@@ -93,12 +123,15 @@ def fetch_withdrawals(api_key: str, api_secret: str, currency: str = None) -> li
     base_url = "https://api.coinbase.com"
 
     def authed_get(path):
-        token = build_coinbase_jwt("GET", path, api_key, api_secret)
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "CB-VERSION": "2023-01-01",
-            "Content-Type": "application/json",
-        }
+        if auth_mode == "jwt":
+            token = build_coinbase_jwt("GET", path, api_key, api_secret)
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "CB-VERSION": "2023-01-01",
+                "Content-Type": "application/json",
+            }
+        else:
+            headers = build_hmac_headers("GET", path, api_key, api_secret)
         req = urllib.request.Request(base_url + path, headers=headers, method="GET")
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -222,67 +255,71 @@ def main():
 
     api_key = None
     api_secret = None
+    auth_mode = "hmac"  # default to legacy HMAC auth
 
     if args.key_json:
+        # CDP key (JWT auth)
+        auth_mode = "jwt"
         try:
             with open(args.key_json, "r") as f:
                 key_data = json.load(f)
             api_key = key_data.get("name")
             raw_pk = key_data.get("privateKey", "")
-            # Fix literal \n sequences
             if "\\n" in raw_pk:
                 raw_pk = raw_pk.replace("\\n", "\n")
             api_secret = raw_pk.strip()
             if not api_key or not api_secret:
                 print("Error: JSON key file must contain 'name' and 'privateKey' fields.", file=sys.stderr)
                 sys.exit(1)
-            print(f"Loaded API key: {api_key}", file=sys.stderr)
+            print(f"Using CDP key (JWT auth): {api_key}", file=sys.stderr)
         except FileNotFoundError:
             print(f"Error: Key file not found: {args.key_json}", file=sys.stderr)
             sys.exit(1)
         except json.JSONDecodeError as e:
             print(f"Error: Invalid JSON in key file: {e}", file=sys.stderr)
             sys.exit(1)
-    else:
+        _check_jwt_deps()
+    elif args.key_file:
+        # PEM key file (JWT auth)
+        auth_mode = "jwt"
         api_key = os.environ.get("COINBASE_API_KEY")
-        if args.key_file:
-            try:
-                with open(args.key_file, "r") as f:
-                    raw = f.read().strip()
-                    if "\\n" in raw:
-                        raw = raw.replace("\\n", "\n")
-                    api_secret = raw
-            except FileNotFoundError:
-                print(f"Error: Key file not found: {args.key_file}", file=sys.stderr)
-                sys.exit(1)
-        else:
-            api_secret = os.environ.get("COINBASE_API_SECRET")
-
+        try:
+            with open(args.key_file, "r") as f:
+                raw = f.read().strip()
+                if "\\n" in raw:
+                    raw = raw.replace("\\n", "\n")
+                api_secret = raw
+        except FileNotFoundError:
+            print(f"Error: Key file not found: {args.key_file}", file=sys.stderr)
+            sys.exit(1)
         if not api_key:
+            print("Error: COINBASE_API_KEY env var required with --key-file", file=sys.stderr)
+            sys.exit(1)
+        print(f"Using CDP key (JWT auth): {api_key}", file=sys.stderr)
+        _check_jwt_deps()
+    else:
+        # Legacy API key (HMAC auth) — from coinbase.com/settings/api
+        api_key = os.environ.get("COINBASE_API_KEY")
+        api_secret = os.environ.get("COINBASE_API_SECRET")
+        if not api_key or not api_secret:
             print(
-                "Error: API key required. Either:\n"
-                "  --key-json cdp_api_key.json   (recommended)\n"
-                "  or set COINBASE_API_KEY env var with --key-file",
+                "Error: No API credentials provided.\n\n"
+                "Option 1 — Legacy key (for personal accounts, recommended):\n"
+                "  Create a key at https://www.coinbase.com/settings/api\n"
+                "  export COINBASE_API_KEY='your-key'\n"
+                "  export COINBASE_API_SECRET='your-secret'\n\n"
+                "Option 2 — CDP key (for developer platform):\n"
+                "  python3 export_coinbase_withdrawals.py --key-json cdp_api_key.json\n",
                 file=sys.stderr,
             )
             sys.exit(1)
-
-        if not api_secret:
-            print(
-                "Error: Private key required. Either:\n"
-                "  --key-json cdp_api_key.json   (recommended)\n"
-                "  or --key-file with a PEM file",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    _check_deps()
+        print("Using legacy key (HMAC auth)", file=sys.stderr)
 
     ext = ".json" if args.use_json else ".csv"
     output_path = args.output or f"coinbase_withdrawals{ext}"
 
     try:
-        withdrawals = fetch_withdrawals(api_key, api_secret, currency=args.currency)
+        withdrawals = fetch_withdrawals(api_key, api_secret, currency=args.currency, auth_mode=auth_mode)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
