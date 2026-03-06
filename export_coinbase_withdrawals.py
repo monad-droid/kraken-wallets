@@ -74,7 +74,17 @@ def build_coinbase_jwt(method: str, path: str, api_key: str, api_secret: str) ->
         "nonce": secrets.token_hex(),
     }
 
-    return jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+
+    # Debug: decode and print the JWT claims (remove --debug flag check to always show)
+    if os.environ.get("DEBUG"):
+        import base64
+        parts = token.split(".")
+        def pad(s): return s + "=" * (4 - len(s) % 4)
+        print("JWT header:", base64.urlsafe_b64decode(pad(parts[0])).decode(), file=sys.stderr)
+        print("JWT payload:", base64.urlsafe_b64decode(pad(parts[1])).decode(), file=sys.stderr)
+
+    return token
 
 
 def fetch_withdrawals(api_key: str, api_secret: str, currency: str = None) -> list:
