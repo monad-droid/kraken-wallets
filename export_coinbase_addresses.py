@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-Export Coinbase withdrawal addresses to CSV for tax/record-keeping purposes.
+Export Coinbase deposit addresses to CSV for tax/record-keeping purposes.
 
-Uses the Coinbase Developer Platform (CDP) API with JWT authentication.
+Uses the official Coinbase Advanced API Python SDK for authentication.
 
 Usage:
-    pip install PyJWT cryptography
+    pip install coinbase-advanced-py
     python export_coinbase_addresses.py --key-file coinbase_key.pem.txt
 
-Environment variables (required unless using --key-file):
+Environment variables (required):
     COINBASE_API_KEY    - Your CDP API key name (starts with "organizations/...")
-    COINBASE_API_SECRET - Your CDP API private key (PEM format)
 
 Optional flags:
-    --key-file FILE     - Path to the PEM private key file (recommended over env var)
+    --key-file FILE     - Path to the PEM private key file (recommended)
     --currency CURRENCY - Filter by currency (e.g. BTC, ETH)
     --output FILE       - Output CSV file path (default: coinbase_addresses.csv)
     --json              - Output as JSON instead of CSV
@@ -23,88 +22,62 @@ import argparse
 import csv
 import json
 import os
-import secrets
 import sys
-import time
-import urllib.error
-import urllib.request
-
-API_URL = "https://api.coinbase.com"
-API_VERSION = "2023-01-01"
 
 
-def _check_jwt_deps():
-    """Check that PyJWT and cryptography are installed."""
+def _check_deps():
+    """Check that the Coinbase SDK is installed."""
     try:
-        import jwt  # noqa: F401
-        return True
+        from coinbase.rest import RESTClient  # noqa: F401
     except ImportError:
         print(
-            "Error: PyJWT and cryptography packages are required for CDP API keys.\n"
-            "Install them with:\n\n"
-            "    pip install PyJWT cryptography\n",
+            "Error: coinbase-advanced-py package is required.\n"
+            "Install it with:\n\n"
+            "    pip install coinbase-advanced-py\n",
             file=sys.stderr,
         )
         sys.exit(1)
 
 
-def build_jwt(method: str, path: str, api_key: str, api_secret: str) -> str:
-    """Build a signed JWT for Coinbase CDP API authentication."""
-    import jwt
-
-    # URI format: "METHOD host/path" (no scheme)
-    host = API_URL.replace("https://", "").replace("http://", "")
-    uri = f"{method.upper()} {host}{path}"
-    now = int(time.time())
-
-    payload = {
-        "sub": api_key,
-        "iss": "cdp",
-        "aud": ["cdp_service"],
-        "nbf": now,
-        "exp": now + 120,
-        "uris": [uri],
-    }
-
-    headers = {
-        "kid": api_key,
-        "nonce": secrets.token_hex(16),
-        "typ": "JWT",
-    }
-
-    return jwt.encode(payload, api_secret, algorithm="ES256", headers=headers)
+def make_client(api_key: str, api_secret: str):
+    """Create a Coinbase REST client."""
+    from coinbase.rest import RESTClient
+    return RESTClient(api_key=api_key, api_secret=api_secret)
 
 
-def coinbase_get(path: str, api_key: str, api_secret: str) -> dict:
-    """Make an authenticated GET request to the Coinbase API."""
-    token = build_jwt("GET", path, api_key, api_secret)
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "CB-VERSION": API_VERSION,
-        "Content-Type": "application/json",
-    }
-
-    req = urllib.request.Request(API_URL + path, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def fetch_all_pages(path: str, api_key: str, api_secret: str) -> list:
-    """Fetch all pages of a paginated Coinbase API endpoint."""
-    items = []
-    next_uri = path
-    while next_uri:
-        result = coinbase_get(next_uri, api_key, api_secret)
-        items.extend(result.get("data", []))
-        pagination = result.get("pagination", {})
-        next_uri = pagination.get("next_uri")
-    return items
-
-
-def fetch_coinbase_addresses(api_key: str, api_secret: str, currency: str = None) -> list:
+def fetch_coinbase_addresses(client, currency: str = None) -> list:
     """Fetch all addresses across all Coinbase accounts."""
-    accounts = fetch_all_pages("/v2/accounts?limit=100", api_key, api_secret)
+    import urllib.request
+
+    from coinbase import jwt_generator
+
+    api_key = client.API_KEY
+    api_secret = client.API_SECRET
+    base_url = "https://api.coinbase.com"
+
+    def authed_get(path):
+        uri = jwt_generator.format_jwt_uri("GET", path)
+        token = jwt_generator.build_rest_jwt(uri, api_key, api_secret)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "CB-VERSION": "2023-01-01",
+            "Content-Type": "application/json",
+        }
+        req = urllib.request.Request(base_url + path, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def fetch_all_pages(path):
+        items = []
+        next_uri = path
+        while next_uri:
+            result = authed_get(next_uri)
+            items.extend(result.get("data", []))
+            pagination = result.get("pagination", {})
+            next_uri = pagination.get("next_uri")
+        return items
+
+    accounts = fetch_all_pages("/v2/accounts?limit=100")
 
     all_addresses = []
     for account in accounts:
@@ -115,11 +88,7 @@ def fetch_coinbase_addresses(api_key: str, api_secret: str, currency: str = None
             continue
 
         acct_id = account["id"]
-        addresses = fetch_all_pages(
-            f"/v2/accounts/{acct_id}/addresses?limit=100",
-            api_key,
-            api_secret,
-        )
+        addresses = fetch_all_pages(f"/v2/accounts/{acct_id}/addresses?limit=100")
 
         for addr in addresses:
             all_addresses.append({
@@ -175,7 +144,7 @@ def main():
     )
     parser.add_argument(
         "--key-file",
-        help="Path to the PEM private key file (recommended over env var)",
+        help="Path to the PEM private key file (recommended)",
     )
     parser.add_argument("--currency", help="Filter by currency (e.g. BTC, ETH)")
     parser.add_argument(
@@ -191,7 +160,6 @@ def main():
     api_key = os.environ.get("COINBASE_API_KEY")
     api_secret = None
 
-    # Load private key from file if --key-file is provided
     if args.key_file:
         try:
             with open(args.key_file, "r") as f:
@@ -220,23 +188,17 @@ def main():
         )
         sys.exit(1)
 
-    # The private key may have literal \n — convert to real newlines
-    if "\\n" in api_secret and "-----BEGIN" in api_secret:
-        api_secret = api_secret.replace("\\n", "\n")
+    _check_deps()
 
-    _check_jwt_deps()
+    client = make_client(api_key, api_secret)
 
     ext = ".json" if args.use_json else ".csv"
     output_path = args.output or f"coinbase_addresses{ext}"
 
     try:
-        addresses = fetch_coinbase_addresses(api_key, api_secret, currency=args.currency)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        print(f"HTTP error {e.code}: {e.reason}\n{body}", file=sys.stderr)
-        sys.exit(1)
-    except urllib.error.URLError as e:
-        print(f"Network error: {e.reason}", file=sys.stderr)
+        addresses = fetch_coinbase_addresses(client, currency=args.currency)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     if args.use_json:
