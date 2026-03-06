@@ -85,7 +85,9 @@ def build_coinbase_jwt(method: str, path: str, api_key: str, api_secret: str) ->
 
     private_key = load_pem_private_key(api_secret.encode("utf-8"), password=None)
 
-    uri = f"{method.upper()} api.coinbase.com{path}"
+    # Strip query params from the URI claim — Coinbase rejects JWTs that include them
+    clean_path = path.split("?")[0]
+    uri = f"{method.upper()} api.coinbase.com{clean_path}"
     now = int(time.time())
 
     # Match the official coinbase-advanced-py SDK's build_jwt() exactly
