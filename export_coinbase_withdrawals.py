@@ -57,16 +57,13 @@ def build_coinbase_jwt(method: str, path: str, api_key: str, api_secret: str) ->
 
     private_key = load_pem_private_key(api_secret.encode("utf-8"), password=None)
 
-    # Extract the UUID from "organizations/.../apiKeys/<uuid>"
-    key_id = api_key.split("/")[-1] if "/" in api_key else api_key
-
     uri = f"{method.upper()} api.coinbase.com{path}"
     now = int(time.time())
 
+    # Match the official coinbase-advanced-py SDK's build_jwt() exactly
     payload = {
         "sub": api_key,
-        "iss": key_id,
-        "aud": ["cdp_service"],
+        "iss": "cdp",
         "nbf": now,
         "exp": now + 120,
         "uri": uri,
@@ -74,8 +71,7 @@ def build_coinbase_jwt(method: str, path: str, api_key: str, api_secret: str) ->
 
     headers = {
         "kid": api_key,
-        "nonce": secrets.token_hex(16),
-        "typ": "JWT",
+        "nonce": secrets.token_hex(),
     }
 
     return jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
