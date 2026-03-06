@@ -6,7 +6,7 @@ Export your withdrawal addresses from **Kraken** and **Coinbase** to CSV or JSON
 
 - Python 3.7+
 - Kraken script: no external dependencies (standard library only)
-- Coinbase scripts: `pip install coinbase-advanced-py`
+- Coinbase scripts: `pip install PyJWT cryptography`
 
 ## Kraken
 
@@ -52,7 +52,7 @@ The CSV contains these columns: `asset`, `method`, `key`, `address`, `memo`, `ve
 Generate a CDP API key at https://www.coinbase.com/settings/api with **View (read-only)** permission. Save the private key to a `.pem.txt` file.
 
 ```bash
-pip install coinbase-advanced-py
+pip install PyJWT cryptography
 
 export COINBASE_API_KEY="organizations/..."        # the API key name
 ```

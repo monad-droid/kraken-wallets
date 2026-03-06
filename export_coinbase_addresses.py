@@ -26,30 +26,65 @@ import sys
 
 
 def _check_deps():
-    """Check that the Coinbase SDK is installed."""
+    """Check that PyJWT and cryptography are installed."""
     try:
-        from coinbase import jwt_generator  # noqa: F401
+        import jwt  # noqa: F401
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key  # noqa: F401
     except ImportError:
         print(
-            "Error: coinbase-advanced-py package is required.\n"
-            "Install it with:\n\n"
-            "    pip install coinbase-advanced-py\n",
+            "Error: PyJWT and cryptography packages are required.\n"
+            "Install them with:\n\n"
+            "    pip install PyJWT cryptography\n",
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+def build_coinbase_jwt(method: str, path: str, api_key: str, api_secret: str) -> str:
+    """Build a JWT for Coinbase CDP API authentication.
+
+    Key detail: 'iss' must be the raw API key UUID, while 'sub' is the full
+    organizations/... key name.
+    """
+    import secrets
+    import time
+    import jwt
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    private_key = load_pem_private_key(api_secret.encode("utf-8"), password=None)
+
+    # Extract the UUID from "organizations/.../apiKeys/<uuid>"
+    key_id = api_key.split("/")[-1] if "/" in api_key else api_key
+
+    uri = f"{method.upper()} api.coinbase.com{path}"
+    now = int(time.time())
+
+    payload = {
+        "sub": api_key,
+        "iss": key_id,
+        "aud": ["cdp_service"],
+        "nbf": now,
+        "exp": now + 120,
+        "uri": uri,
+    }
+
+    headers = {
+        "kid": api_key,
+        "nonce": secrets.token_hex(16),
+        "typ": "JWT",
+    }
+
+    return jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
 
 
 def fetch_coinbase_addresses(api_key: str, api_secret: str, currency: str = None) -> list:
     """Fetch all addresses across all Coinbase accounts."""
     import urllib.request
 
-    from coinbase import jwt_generator
-
     base_url = "https://api.coinbase.com"
 
     def authed_get(path):
-        uri = jwt_generator.format_jwt_uri("GET", path)
-        token = jwt_generator.build_rest_jwt(uri, api_key, api_secret)
+        token = build_coinbase_jwt("GET", path, api_key, api_secret)
         headers = {
             "Authorization": f"Bearer {token}",
             "CB-VERSION": "2023-01-01",
