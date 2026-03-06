@@ -155,7 +155,11 @@ def main():
     if args.key_file:
         try:
             with open(args.key_file, "r") as f:
-                api_secret = f.read().strip()
+                raw = f.read().strip()
+                # Fix literal \n (common when copying from Coinbase UI)
+                if "\\n" in raw:
+                    raw = raw.replace("\\n", "\n")
+                api_secret = raw
         except FileNotFoundError:
             print(f"Error: Key file not found: {args.key_file}", file=sys.stderr)
             sys.exit(1)
