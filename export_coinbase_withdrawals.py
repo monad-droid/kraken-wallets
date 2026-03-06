@@ -8,14 +8,12 @@ the destination address, amount, date, and fees.
 Uses the official Coinbase Advanced API Python SDK for authentication.
 
 Usage:
-    pip install coinbase-advanced-py
-    python export_coinbase_withdrawals.py --key-file coinbase_key.pem.txt
+    pip install PyJWT cryptography
+    python export_coinbase_withdrawals.py --key-json cdp_api_key.json
 
-Environment variables (required):
-    COINBASE_API_KEY    - Your CDP API key name (starts with "organizations/...")
-
-Optional flags:
-    --key-file FILE     - Path to the PEM private key file (recommended)
+Options:
+    --key-json FILE     - Path to the CDP JSON key file (recommended, contains both key name and private key)
+    --key-file FILE     - Path to a PEM private key file (requires COINBASE_API_KEY env var)
     --currency CURRENCY - Filter by currency (e.g. BTC, ETH)
     --output FILE       - Output file path (default: coinbase_withdrawals.csv)
     --json              - Output as JSON instead of CSV
@@ -213,8 +211,12 @@ def main():
         description="Export Coinbase withdrawal transactions to CSV/JSON for tax purposes."
     )
     parser.add_argument(
+        "--key-json",
+        help="Path to the CDP JSON key file (contains both key name and private key)",
+    )
+    parser.add_argument(
         "--key-file",
-        help="Path to the PEM private key file (recommended)",
+        help="Path to a PEM private key file (requires COINBASE_API_KEY env var)",
     )
     parser.add_argument("--currency", help="Filter by currency (e.g. BTC, ETH)")
     parser.add_argument(
@@ -227,40 +229,61 @@ def main():
     )
     args = parser.parse_args()
 
-    api_key = os.environ.get("COINBASE_API_KEY")
+    api_key = None
     api_secret = None
 
-    if args.key_file:
+    if args.key_json:
         try:
-            with open(args.key_file, "r") as f:
-                raw = f.read().strip()
-                # Fix literal \n (common when copying from Coinbase UI)
-                if "\\n" in raw:
-                    raw = raw.replace("\\n", "\n")
-                api_secret = raw
+            with open(args.key_json, "r") as f:
+                key_data = json.load(f)
+            api_key = key_data.get("name")
+            raw_pk = key_data.get("privateKey", "")
+            # Fix literal \n sequences
+            if "\\n" in raw_pk:
+                raw_pk = raw_pk.replace("\\n", "\n")
+            api_secret = raw_pk.strip()
+            if not api_key or not api_secret:
+                print("Error: JSON key file must contain 'name' and 'privateKey' fields.", file=sys.stderr)
+                sys.exit(1)
+            print(f"Loaded API key: {api_key}", file=sys.stderr)
         except FileNotFoundError:
-            print(f"Error: Key file not found: {args.key_file}", file=sys.stderr)
+            print(f"Error: Key file not found: {args.key_json}", file=sys.stderr)
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in key file: {e}", file=sys.stderr)
             sys.exit(1)
     else:
-        api_secret = os.environ.get("COINBASE_API_SECRET")
+        api_key = os.environ.get("COINBASE_API_KEY")
+        if args.key_file:
+            try:
+                with open(args.key_file, "r") as f:
+                    raw = f.read().strip()
+                    if "\\n" in raw:
+                        raw = raw.replace("\\n", "\n")
+                    api_secret = raw
+            except FileNotFoundError:
+                print(f"Error: Key file not found: {args.key_file}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            api_secret = os.environ.get("COINBASE_API_SECRET")
 
-    if not api_key:
-        print(
-            "Error: COINBASE_API_KEY environment variable is required.\n"
-            "This is the API key name that starts with organizations/...\n"
-            "Generate a CDP API key at https://www.coinbase.com/settings/api",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        if not api_key:
+            print(
+                "Error: API key required. Either:\n"
+                "  --key-json cdp_api_key.json   (recommended)\n"
+                "  or set COINBASE_API_KEY env var with --key-file",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    if not api_secret:
-        print(
-            "Error: Private key is required. Either:\n"
-            "  --key-file coinbase_key.pem.txt   (recommended)\n"
-            "  or set COINBASE_API_SECRET env var",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        if not api_secret:
+            print(
+                "Error: Private key required. Either:\n"
+                "  --key-json cdp_api_key.json   (recommended)\n"
+                "  or --key-file with a PEM file",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     _check_deps()
 
