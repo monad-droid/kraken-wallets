@@ -49,33 +49,43 @@ The CSV contains these columns: `asset`, `method`, `key`, `address`, `memo`, `ve
 
 ### Setup
 
-Generate a CDP API key at https://www.coinbase.com/settings/api with **View (read-only)** permission.
+Generate a CDP API key at https://www.coinbase.com/settings/api with **View (read-only)** permission. Save the private key to a `.pem.txt` file.
 
 ```bash
 pip install PyJWT cryptography
 
 export COINBASE_API_KEY="organizations/..."        # the API key name
-export COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
-...
------END EC PRIVATE KEY-----"
 ```
 
 ### Usage
 
 ```bash
-# Export all addresses to CSV
-python export_coinbase_addresses.py
+# Export all withdrawal transactions (sends) to CSV
+python export_coinbase_withdrawals.py --key-file coinbase_key.pem.txt
 
 # Filter by currency
-python export_coinbase_addresses.py --currency BTC
+python export_coinbase_withdrawals.py --key-file coinbase_key.pem.txt --currency BTC
 
 # Export as JSON
-python export_coinbase_addresses.py --json
+python export_coinbase_withdrawals.py --key-file coinbase_key.pem.txt --json
 
-# Custom output file
-python export_coinbase_addresses.py --output my_coinbase_addresses.csv
+# Export account addresses instead
+python export_coinbase_addresses.py --key-file coinbase_key.pem.txt
 ```
 
 ### Output
 
-The CSV contains these columns: `currency`, `account_name`, `address`, `name`, `network`, `created_at`.
+`export_coinbase_withdrawals.py` — every crypto withdrawal you made:
+
+| Column | Description |
+|---|---|
+| `date` | When the withdrawal happened |
+| `currency` | Asset sent (BTC, ETH, etc.) |
+| `amount` | How much was sent |
+| `native_amount` | Value in your local currency at the time |
+| `to_address` | Destination wallet address |
+| `tx_hash` | On-chain transaction hash |
+| `fee` | Network fee |
+| `status` | completed, pending, etc. |
+
+`export_coinbase_addresses.py` — your Coinbase deposit addresses: `currency`, `account_name`, `address`, `name`, `network`, `created_at`.

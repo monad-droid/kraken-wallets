@@ -1,6 +1,10 @@
 # Output files
-withdrawal_addresses.csv
-withdrawal_addresses.json
+*.csv
+*.json
+
+# Key files
+*.pem
+*.pem.txt
 
 # Environment / secrets
 .env
